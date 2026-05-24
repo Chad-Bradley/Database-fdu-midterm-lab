@@ -38,7 +38,7 @@ def init_database():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         book_id INTEGER NOT NULL UNIQUE,
         stock_quantity INTEGER NOT NULL CHECK(stock_quantity >= 0),
-        FOREIGN KEY (book_id) REFERENCES book(id)
+        FOREIGN KEY (book_id) REFERENCES book(id) ON DELETE CASCADE
     )''')
 
     cursor.execute('''
@@ -49,9 +49,7 @@ def init_database():
         purchase_price REAL NOT NULL CHECK(purchase_price>0),
         quantity INTEGER NOT NULL CHECK(quantity>=1),
         status TEXT NOT NULL CHECK(status IN ('unpaid','paid','returned','stocked')),
-        create_time TEXT NOT NULL,
-        FOREIGN KEY (book_id) REFERENCES book(id),
-        FOREIGN KEY (user_id) REFERENCES user(id)
+        create_time TEXT NOT NULL
     )''')
 
     cursor.execute('''
@@ -59,11 +57,9 @@ def init_database():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
         book_id INTEGER NOT NULL,
-        sale_price REAL NOT NULL,
+        sale_price REAL NOT NULL CHECK(sale_price>0),
         quantity INTEGER NOT NULL CHECK(quantity >= 1),
-        sale_time TEXT NOT NULL,
-        FOREIGN KEY (book_id) REFERENCES book(id),
-        FOREIGN KEY (user_id) REFERENCES user(id)
+        sale_time TEXT NOT NULL
     )''')
 
     cursor.execute('''
@@ -82,13 +78,39 @@ def init_database():
         user_id INTEGER NOT NULL,
         action TEXT NOT NULL,
         detail TEXT,
-        create_time TEXT NOT NULL,
-        FOREIGN KEY (user_id) REFERENCES user(id)
+        create_time TEXT NOT NULL
     )''')
+
+    cursor.execute('''
+
+    CREATE TRIGGER IF NOT EXISTS after_sale_insert_bill
+    AFTER INSERT ON sale
+    BEGIN
+        INSERT INTO bill(type,amount,related_id,comment,create_time)
+        VALUES ('income',NEW.sale_price*NEW.quantity,NEW.id,
+                '销售图书，收入'||printf('%.2f',NEW.sale_price*NEW.quantity)||'元',
+                NEW.sale_time);
+    END;
+    ''')
+    cursor.execute('''
+    CREATE TRIGGER IF NOT EXISTS after_purchase_pay_bill
+    AFTER UPDATE OF status ON purchase
+    WHEN NEW.status='paid' AND OLD.status='unpaid'
+    BEGIN
+        INSERT INTO bill (type,amount,related_id,comment,create_time)
+        VALUES('expense',NEW.purchase_price*NEW.quantity,NEW.id,
+                '进货付款 单号:'||NEW.id,
+                datetime('now','localtime'));
+    END;
+    ''')
+
+
 
     conn.commit()
     conn.close()
     print("初始化完成")
+
+
 
 if __name__ == "__main__":
     init_database()

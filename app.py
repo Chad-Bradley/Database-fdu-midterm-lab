@@ -4,7 +4,7 @@ from collections import OrderedDict
 from functools import wraps
 from database import init_database
 from user import login, add_user, get_all_users, init_admin, update_user_by_admin, reset_password, delete_users, change_password, get_my_info, update_my_info, import_users_csv
-from book import add_book, get_all_books, get_book_by_isbn, get_book_by_id, get_book_by_bookname, get_book_by_author, get_book_by_publisher, update_book, delete_book, get_stock, get_all_stock, get_books_by_key_words, get_books_by_price, import_books_csv
+from book import add_book, get_all_books, get_book_by_isbn, get_book_by_id, get_book_by_bookname, get_book_by_author, get_book_by_publisher, update_book, delete_book, get_stock, get_all_stock, get_books_by_key_words, get_books_by_price, get_books_by_stock, import_books_csv
 from purchase import create_purchase, get_all_purchases, pay_purchase, return_purchase, stock_in_purchase
 from sale import create_sale, get_all_sales
 from bill import get_all_bills, get_bill_stat
@@ -527,32 +527,80 @@ def my_changepwd():
 @app.route('/book')
 @login_required
 def book_list():
+    # 获取所有查询参数
     keyword = request.args.get('keyword', '').strip()
+    
+    # 价格筛选
     price_low = request.args.get('price_low', '').strip()
     price_high = request.args.get('price_high', '').strip()
-    # 优先使用价格筛选
-    if price_low and price_high:
+    
+    # 库存筛选
+    stock_min = request.args.get('stock_min', '').strip()
+    stock_max = request.args.get('stock_max', '').strip()
+    
+    # 单独字段查询
+    search_isbn = request.args.get('search_isbn', '').strip()
+    search_name = request.args.get('search_name', '').strip()
+    search_author = request.args.get('search_author', '').strip()
+    search_publisher = request.args.get('search_publisher', '').strip()
+    
+    # 根据条件查询
+    if search_isbn:
+        books = get_book_by_isbn(search_isbn)
+    elif search_name:
+        books = get_book_by_bookname(search_name)
+    elif search_author:
+        books = get_book_by_author(search_author)
+    elif search_publisher:
+        books = get_book_by_publisher(search_publisher)
+    elif price_low and price_high:
         try:
             books = get_books_by_price(float(price_low), float(price_high))
+        except ValueError:
+            books = get_all_books()
+    elif stock_min or stock_max:
+        try:
+            min_s = int(stock_min) if stock_min else None
+            max_s = int(stock_max) if stock_max else None
+            books = get_books_by_stock(min_s, max_s)
         except ValueError:
             books = get_all_books()
     elif keyword:
         books = get_books_by_key_words(keyword)
     else:
         books = get_all_books()
+    
     stock_map = get_all_stock()
     book_rows = ""
     is_super = session.get("user", {}).get("role") == "super"
     for b in books:
         # b: id, isbn, book_name, author, publisher, retail_price
-        stock = stock_map.get(b[0], 0)
+        book_id = b[0]
+        stock = stock_map.get(book_id, 0)
         stock_style = "color:red;font-weight:bold" if stock <= 5 else ("color:orange;font-weight:bold" if stock <= 20 else "")
-        price_display = b[5] if b[5] is not None else "未设置"
+        price_display = f"¥{b[5]:.2f}" if b[5] is not None else "未设置"
+        if is_super:
+            edit_btn = '<button type=button class="btn btn-primary btn-sm" onclick="showEditModal(%d, \'%s\', \'%s\', \'%s\', \'%s\')">修改</button>' % (book_id, _html.escape(str(b[2]), True), _html.escape(str(b[3]), True), _html.escape(str(b[4]), True), _html.escape(str(b[5] if b[5] is not None else ''), True))
+            delete_btn = '<form method=post action=/book/delete style="display:inline"><input type=hidden name=book_id value=%d><button type=submit class="btn btn-danger btn-sm" onclick="return confirm(\'确认删除？\')">删除</button></form>' % book_id
+        else:
+            edit_btn = ''
+            delete_btn = ''
         book_rows += f'''
         <tr>
             <td>{b[0]}</td><td>{b[1]}</td><td>{b[2]}</td><td>{b[3]}</td>
             <td>{b[4]}</td><td>{price_display}</td><td style="{stock_style}">{stock}</td>
+            <td><div style="display:flex;gap:6px;align-items:center">{edit_btn}{delete_btn}</div></td>
         </tr>'''
+    
+    # 判断当前使用的是哪种查询方式，用于表单回显
+    active_tab = "keyword"
+    if search_isbn: active_tab = "isbn"
+    elif search_name: active_tab = "name"
+    elif search_author: active_tab = "author"
+    elif search_publisher: active_tab = "publisher"
+    elif price_low or price_high: active_tab = "price"
+    elif stock_min or stock_max: active_tab = "stock"
+    
     add_book_card = '''
     <div class="card">
         <div class="card-title">添加图书</div>
@@ -575,28 +623,115 @@ def book_list():
         </div>
         <p style="color:gray;font-size:12px;margin-top:8px">CSV格式：isbn,book_name,author,publisher</p>
     </div>'''
+    
     body = f'''
     <div class="card">
         <div class="card-title">书籍查询</div>
-        <form method=get action=/book class=form-inline>
-            <input name=keyword value="{keyword}" placeholder="输入ISBN/书名/作者/出版社" style=width:200px>
-            <span style="margin:0 10px">或</span>
-            价格从 <input name=price_low value="{price_low}" type=number step=0.01 min=0 style=width:80px>
-            到 <input name=price_high value="{price_high}" type=number step=0.01 min=0 style=width:80px>
-            <button type=submit class=btn-primary style="margin-left:10px">查询</button>
-            <a href=/book class="btn btn-outline">清除</a>
-        </form>
+        <div style="margin-bottom:12px">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+                <span class="btn btn-sm {"btn-primary" if active_tab=="keyword" else "btn-outline"}" onclick="switchTab('keyword')">关键词搜索</span>
+                <span class="btn btn-sm {"btn-primary" if active_tab=="isbn" else "btn-outline"}" onclick="switchTab('isbn')">ISBN</span>
+                <span class="btn btn-sm {"btn-primary" if active_tab=="name" else "btn-outline"}" onclick="switchTab('name')">书名</span>
+                <span class="btn btn-sm {"btn-primary" if active_tab=="author" else "btn-outline"}" onclick="switchTab('author')">作者</span>
+                <span class="btn btn-sm {"btn-primary" if active_tab=="publisher" else "btn-outline"}" onclick="switchTab('publisher')">出版社</span>
+                <span class="btn btn-sm {"btn-primary" if active_tab=="price" else "btn-outline"}" onclick="switchTab('price')">价格区间</span>
+                <span class="btn btn-sm {"btn-primary" if active_tab=="stock" else "btn-outline"}" onclick="switchTab('stock')">库存数量</span>
+            </div>
+            
+            <form method=get action=/book id="searchForm">
+                <!-- 关键词搜索 -->
+                <div id="tab-keyword" class="form-inline" style="{"display:none" if active_tab!="keyword" else ""}">
+                    <input name=keyword value="{keyword}" placeholder="输入ISBN/书名/作者/出版社" style=width:250px>
+                    <button type=submit class=btn-primary>查询</button>
+                    <a href=/book class="btn btn-outline">清除</a>
+                </div>
+                <!-- ISBN -->
+                <div id="tab-isbn" class="form-inline" style="{"display:none" if active_tab!="isbn" else ""}">
+                    <input name=search_isbn value="{search_isbn}" placeholder="输入ISBN" style=width:250px>
+                    <button type=submit class=btn-primary>查询</button>
+                    <a href=/book class="btn btn-outline">清除</a>
+                </div>
+                <!-- 书名 -->
+                <div id="tab-name" class="form-inline" style="{"display:none" if active_tab!="name" else ""}">
+                    <input name=search_name value="{search_name}" placeholder="输入书名" style=width:250px>
+                    <button type=submit class=btn-primary>查询</button>
+                    <a href=/book class="btn btn-outline">清除</a>
+                </div>
+                <!-- 作者 -->
+                <div id="tab-author" class="form-inline" style="{"display:none" if active_tab!="author" else ""}">
+                    <input name=search_author value="{search_author}" placeholder="输入作者" style=width:250px>
+                    <button type=submit class=btn-primary>查询</button>
+                    <a href=/book class="btn btn-outline">清除</a>
+                </div>
+                <!-- 出版社 -->
+                <div id="tab-publisher" class="form-inline" style="{"display:none" if active_tab!="publisher" else ""}">
+                    <input name=search_publisher value="{search_publisher}" placeholder="输入出版社" style=width:250px>
+                    <button type=submit class=btn-primary>查询</button>
+                    <a href=/book class="btn btn-outline">清除</a>
+                </div>
+                <!-- 价格区间 -->
+                <div id="tab-price" class="form-inline" style="{"display:none" if active_tab!="price" else ""}">
+                    从 <input name=price_low value="{price_low}" type=number step=0.01 min=0 style=width:80px> 元
+                    到 <input name=price_high value="{price_high}" type=number step=0.01 min=0 style=width:80px> 元
+                    <button type=submit class=btn-primary>查询</button>
+                    <a href=/book class="btn btn-outline">清除</a>
+                </div>
+                <!-- 库存数量 -->
+                <div id="tab-stock" class="form-inline" style="{"display:none" if active_tab!="stock" else ""}">
+                    从 <input name=stock_min value="{stock_min}" type=number min=0 style=width:80px> 本
+                    到 <input name=stock_max value="{stock_max}" type=number min=0 style=width:80px> 本
+                    <button type=submit class=btn-primary>查询</button>
+                    <a href=/book class="btn btn-outline">清除</a>
+                </div>
+            </form>
+        </div>
     </div>
     {add_book_card if is_super else ''}
     <div class="card">
         <div class="card-title">图书列表</div>
         <div style="overflow-x:auto">
         <table>
-            <tr><th>ID</th><th>ISBN</th><th>书名</th><th>作者</th><th>出版社</th><th>零售价</th><th>库存</th></tr>
+            <tr><th>ID</th><th>ISBN</th><th>书名</th><th>作者</th><th>出版社</th><th>零售价</th><th>库存</th><th>操作</th></tr>
             {book_rows}
         </table>
         </div>
-    </div>'''
+    </div>
+    <script>
+    function switchTab(tab) {{
+        document.querySelectorAll('[id^="tab-"]').forEach(function(el) {{
+            el.style.display = 'none';
+        }});
+        document.getElementById('tab-' + tab).style.display = 'flex';
+    }}
+    function showEditModal(id, name, author, publisher, price) {{
+        document.getElementById('edit_book_id').value = id;
+        document.getElementById('edit_book_name').value = name;
+        document.getElementById('edit_author').value = author;
+        document.getElementById('edit_publisher').value = publisher;
+        document.getElementById('edit_price').value = price;
+        document.getElementById('editModal').style.display = 'flex';
+    }}
+    function closeEditModal() {{
+        document.getElementById('editModal').style.display = 'none';
+    }}
+    </script>
+    <div id="editModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center">
+        <div class="card" style="width:420px;max-width:95vw">
+            <div class="card-title">修改图书信息</div>
+            <form method=post action=/book/update onsubmit="closeEditModal()">
+                <input type=hidden name=book_id id=edit_book_id>
+                <div class="form-group"><label>书名</label><input name=book_name id=edit_book_name></div>
+                <div class="form-group"><label>作者</label><input name=author id=edit_author></div>
+                <div class="form-group"><label>出版社</label><input name=publisher id=edit_publisher></div>
+                <div class="form-group"><label>零售价</label><input name=price id=edit_price type=number step=0.01 min=0></div>
+                <div style="display:flex;gap:8px">
+                    <button type=submit class="btn-primary">保存修改</button>
+                    <button type=button class="btn btn-outline" onclick="closeEditModal()">取消</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    '''
     return page("图书管理", body, "book")
 
 @app.route('/book/add', methods=['POST'])
@@ -982,43 +1117,66 @@ def sale_add():
 @app.route('/stock')
 @login_required
 def stock_page():
-    search_type = request.args.get('search_type', '').strip()
-    search_value = request.args.get('search_value', '').strip()
+    # 获取查询参数
+    keyword = request.args.get('keyword', '').strip()
+    search_isbn = request.args.get('search_isbn', '').strip()
+    search_name = request.args.get('search_name', '').strip()
+    search_author = request.args.get('search_author', '').strip()
+    search_publisher = request.args.get('search_publisher', '').strip()
+    price_low = request.args.get('price_low', '').strip()
+    price_high = request.args.get('price_high', '').strip()
+    stock_min = request.args.get('stock_min', '').strip()
+    stock_max = request.args.get('stock_max', '').strip()
 
-    if search_type and search_value:
-        if search_type == 'id':
-            try:
-                books = get_book_by_id(int(search_value))
-            except (ValueError, TypeError):
-                books = []
-        elif search_type == 'isbn':
-            books = get_book_by_isbn(search_value)
-        elif search_type == 'book_name':
-            books = get_book_by_bookname(search_value)
-        elif search_type == 'author':
-            books = get_book_by_author(search_value)
-        elif search_type == 'publisher':
-            books = get_book_by_publisher(search_value)
-        else:
+    # 根据条件查询
+    if search_isbn:
+        books = get_book_by_isbn(search_isbn)
+    elif search_name:
+        books = get_book_by_bookname(search_name)
+    elif search_author:
+        books = get_book_by_author(search_author)
+    elif search_publisher:
+        books = get_book_by_publisher(search_publisher)
+    elif price_low and price_high:
+        try:
+            books = get_books_by_price(float(price_low), float(price_high))
+        except ValueError:
             books = get_all_books()
+    elif stock_min or stock_max:
+        try:
+            min_s = int(stock_min) if stock_min else None
+            max_s = int(stock_max) if stock_max else None
+            books = get_books_by_stock(min_s, max_s)
+        except ValueError:
+            books = get_all_books()
+    elif keyword:
+        books = get_books_by_key_words(keyword)
     else:
         books = get_all_books()
 
     stock_map = get_all_stock()
     books = sorted(books, key=lambda b: stock_map.get(b[0], 0))
-    stock_rows = ""
     low_count = 0
     is_super = session.get("user", {}).get("role") == "super"
+
+    # 判断当前 tab
+    active_tab = "keyword"
+    if search_isbn: active_tab = "isbn"
+    elif search_name: active_tab = "name"
+    elif search_author: active_tab = "author"
+    elif search_publisher: active_tab = "publisher"
+    elif price_low or price_high: active_tab = "price"
+    elif stock_min or stock_max: active_tab = "stock"
+
+    stock_rows = ""
     for b in books:
         stock = stock_map.get(b[0], 0)
         if stock <= 5:
             low_count += 1
         stock_style = "color:red;font-weight:bold" if stock <= 5 else ("color:orange;font-weight:bold" if stock <= 20 else "")
-        price_display = b[5] if b[5] is not None else "未设置"
-        # 操作按钮：修改（弹窗）、删除
-        _price_val = b[5] if b[5] is not None else ''
+        price_display = f"¥{b[5]:.2f}" if b[5] is not None else "未设置"
         if is_super:
-            edit_btn = '<button type=button class="btn btn-primary btn-sm" onclick="showEditModal(%d, \'%s\', \'%s\', \'%s\', \'%s\')">修改</button>' % (b[0], _html.escape(str(b[2]), True), _html.escape(str(b[3]), True), _html.escape(str(b[4]), True), _html.escape(str(_price_val), True))
+            edit_btn = '<button type=button class="btn btn-primary btn-sm" onclick="showEditModal(%d, \'%s\', \'%s\', \'%s\', \'%s\')">修改</button>' % (b[0], _html.escape(str(b[2]), True), _html.escape(str(b[3]), True), _html.escape(str(b[4]), True), _html.escape(str(b[5] if b[5] is not None else ''), True))
             delete_btn = '<form method=post action=/book/delete style="display:inline"><input type=hidden name=book_id value=%d><button type=submit class="btn btn-danger btn-sm" onclick="return confirm(\'确认删除？\')">删除</button></form>' % b[0]
         else:
             edit_btn = ''
@@ -1029,25 +1187,64 @@ def stock_page():
             <td>{b[4]}</td><td>{price_display}</td><td style="{stock_style}">{stock}</td>
             <td><div style="display:flex;gap:6px;align-items:center">{edit_btn}{delete_btn}</div></td>
         </tr>'''
+
     alert = f'<div class="alert alert-danger">有 {low_count} 种图书库存不足（≤5）</div>' if low_count > 0 else ''
-    search_opts = f'''
-    <option value="id" {"selected" if search_type=="id" else ""}>书籍编号</option>
-    <option value="isbn" {"selected" if search_type=="isbn" else ""}>ISBN号</option>
-    <option value="book_name" {"selected" if search_type=="book_name" else ""}>书名</option>
-    <option value="author" {"selected" if search_type=="author" else ""}>作者</option>
-    <option value="publisher" {"selected" if search_type=="publisher" else ""}>出版社</option>
-    '''
+
     body = f'''
     <h1>库存管理</h1>
     {alert}
     <div class="card">
         <div class="card-title">库存查询</div>
-        <form method=get action=/stock class=form-inline>
-            <select name=search_type style=width:100px>{search_opts}</select>
-            <input name=search_value value="{search_value}" placeholder="输入查询内容" style=width:200px>
-            <button type=submit class=btn-primary>查询</button>
-            <a href=/stock class="btn btn-outline">清除</a>
-        </form>
+        <div style="margin-bottom:12px">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+                <span class="btn btn-sm {"btn-primary" if active_tab=="keyword" else "btn-outline"}" onclick="switchTab('keyword')">关键词</span>
+                <span class="btn btn-sm {"btn-primary" if active_tab=="isbn" else "btn-outline"}" onclick="switchTab('isbn')">ISBN</span>
+                <span class="btn btn-sm {"btn-primary" if active_tab=="name" else "btn-outline"}" onclick="switchTab('name')">书名</span>
+                <span class="btn btn-sm {"btn-primary" if active_tab=="author" else "btn-outline"}" onclick="switchTab('author')">作者</span>
+                <span class="btn btn-sm {"btn-primary" if active_tab=="publisher" else "btn-outline"}" onclick="switchTab('publisher')">出版社</span>
+                <span class="btn btn-sm {"btn-primary" if active_tab=="price" else "btn-outline"}" onclick="switchTab('price')">价格区间</span>
+                <span class="btn btn-sm {"btn-primary" if active_tab=="stock" else "btn-outline"}" onclick="switchTab('stock')">库存数量</span>
+            </div>
+            <form method=get action=/stock id="searchForm">
+                <div id="tab-keyword" class="form-inline" style="{"display:none" if active_tab!="keyword" else ""}">
+                    <input name=keyword value="{keyword}" placeholder="输入ISBN/书名/作者/出版社" style=width:250px>
+                    <button type=submit class=btn-primary>查询</button>
+                    <a href=/stock class="btn btn-outline">清除</a>
+                </div>
+                <div id="tab-isbn" class="form-inline" style="{"display:none" if active_tab!="isbn" else ""}">
+                    <input name=search_isbn value="{search_isbn}" placeholder="输入ISBN" style=width:250px>
+                    <button type=submit class=btn-primary>查询</button>
+                    <a href=/stock class="btn btn-outline">清除</a>
+                </div>
+                <div id="tab-name" class="form-inline" style="{"display:none" if active_tab!="name" else ""}">
+                    <input name=search_name value="{search_name}" placeholder="输入书名" style=width:250px>
+                    <button type=submit class=btn-primary>查询</button>
+                    <a href=/stock class="btn btn-outline">清除</a>
+                </div>
+                <div id="tab-author" class="form-inline" style="{"display:none" if active_tab!="author" else ""}">
+                    <input name=search_author value="{search_author}" placeholder="输入作者" style=width:250px>
+                    <button type=submit class=btn-primary>查询</button>
+                    <a href=/stock class="btn btn-outline">清除</a>
+                </div>
+                <div id="tab-publisher" class="form-inline" style="{"display:none" if active_tab!="publisher" else ""}">
+                    <input name=search_publisher value="{search_publisher}" placeholder="输入出版社" style=width:250px>
+                    <button type=submit class=btn-primary>查询</button>
+                    <a href=/stock class="btn btn-outline">清除</a>
+                </div>
+                <div id="tab-price" class="form-inline" style="{"display:none" if active_tab!="price" else ""}">
+                    从 <input name=price_low value="{price_low}" type=number step=0.01 min=0 style=width:80px> 元
+                    到 <input name=price_high value="{price_high}" type=number step=0.01 min=0 style=width:80px> 元
+                    <button type=submit class=btn-primary>查询</button>
+                    <a href=/stock class="btn btn-outline">清除</a>
+                </div>
+                <div id="tab-stock" class="form-inline" style="{"display:none" if active_tab!="stock" else ""}">
+                    从 <input name=stock_min value="{stock_min}" type=number min=0 style=width:80px> 本
+                    到 <input name=stock_max value="{stock_max}" type=number min=0 style=width:80px> 本
+                    <button type=submit class=btn-primary>查询</button>
+                    <a href=/stock class="btn btn-outline">清除</a>
+                </div>
+            </form>
+        </div>
     </div>
     <div class="card">
         <div style="overflow-x:auto">
@@ -1057,38 +1254,43 @@ def stock_page():
         </table>
         </div>
     </div>
-    <!-- 修改图书弹窗 -->
-    <div id="editModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.4);z-index:1000" onclick="if(event.target===this)closeEditModal()">
-        <div style="background:#fff;border-radius:8px;padding:24px;max-width:400px;margin:120px auto;box-shadow:0 4px 20px rgba(0,0,0,0.2)">
-            <div style="font-size:18px;font-weight:600;margin-bottom:16px;color:var(--primary-dark)">修改图书信息</div>
-            <form method=post action=/book/update>
-                <input type=hidden name=book_id id=edit_book_id>
-                <div class="form-group"><label>书名</label><input name=book_name id=edit_book_name style=width:220px></div>
-                <div class="form-group"><label>作者</label><input name=author id=edit_author style=width:220px></div>
-                <div class="form-group"><label>出版社</label><input name=publisher id=edit_publisher style=width:220px></div>
-                <div class="form-group"><label>零售价</label><input name=price id=edit_price type=number step=0.01 style=width:100px></div>
-                <div style="display:flex;gap:10px;margin-top:16px">
-                    <button type=submit class="btn btn-primary">完成修改</button>
-                    <button type=button class="btn btn-outline" onclick="closeEditModal()">取消</button>
-                </div>
-            </form>
-        </div>
-    </div>
     <script>
+    function switchTab(tab) {{
+        document.querySelectorAll('[id^="tab-"]').forEach(function(el) {{
+            el.style.display = 'none';
+        }});
+        document.getElementById('tab-' + tab).style.display = 'flex';
+    }}
     function showEditModal(id, name, author, publisher, price) {{
         document.getElementById('edit_book_id').value = id;
         document.getElementById('edit_book_name').value = name;
         document.getElementById('edit_author').value = author;
         document.getElementById('edit_publisher').value = publisher;
         document.getElementById('edit_price').value = price;
-        document.getElementById('editModal').style.display = 'block';
+        document.getElementById('editModal').style.display = 'flex';
     }}
     function closeEditModal() {{
         document.getElementById('editModal').style.display = 'none';
     }}
-    </script>'''
+    </script>
+    <div id="editModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center">
+        <div class="card" style="width:420px;max-width:95vw">
+            <div class="card-title">修改图书信息</div>
+            <form method=post action=/book/update onsubmit="closeEditModal()">
+                <input type=hidden name=book_id id=edit_book_id>
+                <div class="form-group"><label>书名</label><input name=book_name id=edit_book_name></div>
+                <div class="form-group"><label>作者</label><input name=author id=edit_author></div>
+                <div class="form-group"><label>出版社</label><input name=publisher id=edit_publisher></div>
+                <div class="form-group"><label>零售价</label><input name=price id=edit_price type=number step=0.01 min=0></div>
+                <div style="display:flex;gap:8px">
+                    <button type=submit class="btn-primary">保存修改</button>
+                    <button type=button class="btn btn-outline" onclick="closeEditModal()">取消</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    '''
     return page("库存管理", body, "stock")
-
 @app.route('/stock/quick_purchase', methods=['POST'])
 @login_required
 def stock_quick_purchase():

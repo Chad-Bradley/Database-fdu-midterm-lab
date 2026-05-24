@@ -1,21 +1,6 @@
 from database import get_db
 from datetime import datetime
 
-#账单管理
-
-#添加账单
-def add_bill(bill_type, amount, related_id, comment):
-    if amount <= 0:
-        return False, "金额必须大于0"
-    create_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    conn, cursor = get_db()
-    cursor.execute('''
-        INSERT INTO bill (type, amount, related_id, comment, create_time)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (bill_type, amount, related_id, comment, create_time))
-    conn.commit()
-    conn.close()
-    return True, "账单记录成功"
 #查询所有账单
 def get_all_bills():
     conn, cursor = get_db()

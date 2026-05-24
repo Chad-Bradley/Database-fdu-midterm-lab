@@ -1,7 +1,6 @@
 from database import get_db
 from book import get_stock, get_retail_price
 from datetime import datetime
-from bill import add_bill
 from log import add_log
 
 # 销售管理
@@ -9,6 +8,18 @@ from log import add_log
 #创建销售单
 def create_sale(user_id,book_id,quantity):
     conn,cursor=get_db()
+    # 检查用户是否存在
+    cursor.execute('SELECT id FROM user WHERE id=?', (user_id,))
+    if not cursor.fetchone():
+        conn.close()
+        return False, "用户不存在"
+    
+    # 检查图书是否存在
+    cursor.execute('SELECT id FROM book WHERE id=?', (book_id,))
+    if not cursor.fetchone():
+        conn.close()
+        return False, "图书不存在"
+
     sale_price=get_retail_price(book_id)
     if sale_price is None:
         conn.close()
@@ -34,7 +45,6 @@ def create_sale(user_id,book_id,quantity):
     ''',(quantity,book_id))
     conn.commit()
     conn.close()
-    add_bill("income",sale_price*quantity,sale_id,f"销售图书，收入{sale_price*quantity}元")
     add_log(user_id, "录入销售", f"图书ID：{book_id}，数量：{quantity}")
     return True,f"销售成功！单价：{sale_price}，总金额：{sale_price*quantity}"
 

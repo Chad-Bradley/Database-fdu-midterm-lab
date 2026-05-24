@@ -1,6 +1,5 @@
 from database import get_db
 from datetime import datetime
-from bill import add_bill
 from log import add_log
 
 # 进货管理
@@ -8,11 +7,24 @@ from log import add_log
 # 创建进货单
 def create_purchase(user_id, book_id, purchase_price, quantity):
     if purchase_price <= 0:
+        conn.close()
         return False, "进货单价为正数"
     if quantity < 1:
+        conn.close()
         return False, "数量至少为1"
     create_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn, cursor = get_db()
+    # 检查用户是否存在
+    cursor.execute('SELECT id FROM user WHERE id=?', (user_id,))
+    if not cursor.fetchone():
+        conn.close()
+        return False, "用户不存在"
+    
+    # 检查图书是否存在
+    cursor.execute('SELECT id FROM book WHERE id=?', (book_id,))
+    if not cursor.fetchone():
+        conn.close()
+        return False, "图书不存在"
     cursor.execute('''
         INSERT INTO purchase (user_id, book_id, purchase_price, quantity, status, create_time)
         VALUES (?,?,?,?,?,?)
@@ -52,7 +64,7 @@ def pay_purchase(operator_id, purchase_id):
     ''', (purchase_id,))
     conn.commit()
     conn.close()
-    add_bill("expense", purchase_price * quantity, purchase_id, f"进货付款 单号:{purchase_id}")
+    # add_bill("expense", purchase_price * quantity, purchase_id, f"进货付款 单号:{purchase_id}")
     add_log(operator_id, "进货付款", f"进货单ID：{purchase_id}")
     return True, "付款成功，已记录支出账单"
 

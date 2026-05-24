@@ -116,6 +116,45 @@ def get_books_by_price(low,high):
     conn.close()
     return books
 
+#根据库存数量查询书籍（支持分页和排序）
+def get_books_by_stock(min_stock=None, max_stock=None):
+    conn,cursor=get_db()
+    if min_stock is not None and max_stock is not None:
+        cursor.execute('''
+            SELECT b.id,b.isbn,b.book_name,b.author,b.publisher,b.retail_price,i.stock_quantity
+            FROM book b
+            JOIN inventory i ON b.id=i.book_id
+            WHERE i.stock_quantity>=? AND i.stock_quantity<=?
+            ORDER BY i.stock_quantity
+        ''',(min_stock,max_stock))
+    elif min_stock is not None:
+        cursor.execute('''
+            SELECT b.id,b.isbn,b.book_name,b.author,b.publisher,b.retail_price,i.stock_quantity
+            FROM book b
+            JOIN inventory i ON b.id=i.book_id
+            WHERE i.stock_quantity>=?
+            ORDER BY i.stock_quantity
+        ''',(min_stock,))
+    elif max_stock is not None:
+        cursor.execute('''
+            SELECT b.id,b.isbn,b.book_name,b.author,b.publisher,b.retail_price,i.stock_quantity
+            FROM book b
+            JOIN inventory i ON b.id=i.book_id
+            WHERE i.stock_quantity<=?
+            ORDER BY i.stock_quantity
+        ''',(max_stock,))
+    else:
+        cursor.execute('''
+            SELECT b.id,b.isbn,b.book_name,b.author,b.publisher,b.retail_price,i.stock_quantity
+            FROM book b
+            JOIN inventory i ON b.id=i.book_id
+            ORDER BY i.stock_quantity
+        ''')
+    books=cursor.fetchall()
+    conn.close()
+    return books
+
+    
 #更新书籍信息
 def update_book(operator_id, book_id, book_name, author, publisher, retail_price, role=None):
     if role is not None and role != "super":
@@ -142,10 +181,6 @@ def delete_book(operator_id, book_id, role=None):
         return False,"普通员工无权修改图书信息"
     conn,cursor=get_db()
     try:
-        # 先删除关联的记录（外键依赖）
-        cursor.execute('DELETE FROM sale WHERE book_id=?', (book_id,))
-        cursor.execute('DELETE FROM purchase WHERE book_id=?', (book_id,))
-        cursor.execute('DELETE FROM inventory WHERE book_id=?', (book_id,))
         cursor.execute('DELETE FROM book WHERE id=?', (book_id,))
         conn.commit()
         conn.close()
@@ -223,3 +258,4 @@ def get_retail_price(book_id):
     res=cursor.fetchone()
     conn.close()
     return res[0] if res else None
+
